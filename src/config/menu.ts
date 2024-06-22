@@ -1,6 +1,6 @@
-import { Bodies, Body } from 'matter-js';
-import { Application } from '@/Application';
-import { MenuConfig, MenuItemConfig } from "@/menu/MenuItem";
+import { Bodies } from 'matter-js';
+import { Application } from '../Application';
+import { MenuConfig, MenuItemConfig } from "../menu/MenuItem";
 import { Util } from '../util/Util';
 import { Slider2DForm } from '../menu/form/Slider2DForm';
 
@@ -12,27 +12,23 @@ const settingsFormMap: {[key: string]: (app: Application, key: string, value: an
 				text: 'Direction',
 				value: app.settings.gravity,
 				form: Slider2DForm,
+				formConfig: {
+					min: -3,
+					max: 3
+				},
 				bind: {
 					target: app.settings,
 					field: key
 				},
 				fn: () => {
 					app.storage.set('settings', app.settings);
-				}
-			}, {
-				text: 'Scale',
-				value: app.settings.gravityScale,
-				bind: {
-					target: app.settings,
-					field: 'gravityScale'
-				},
-				fn: () => {
-					app.storage.set('settings', app.settings);
+					app.engine.configure(app.settings)
 				}
 			}]
 		};
 	},
-	gravityScale: () => null
+	gravityScale: () => null,
+	enableDebug: () => null
 }
 
 export default function(app: Application): MenuConfig {
@@ -87,6 +83,7 @@ export default function(app: Application): MenuConfig {
 				},
 				fn: () => {
 					app.storage.set('settings', app.settings);
+					app.updateHost();
 				}
 			};
 
@@ -118,7 +115,7 @@ export default function(app: Application): MenuConfig {
 		menu: settingsButtons()
 	},
 	{
-		text: 'Clear cache',
+		text: 'Clear local data',
 		fn: () => {
 			app.storage.clear();
 		}

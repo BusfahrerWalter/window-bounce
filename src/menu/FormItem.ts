@@ -13,7 +13,7 @@ export class FormItem<T> extends MenuItem<T> {
 			throw new Error('Could not build form menu item');
 		}
 
-		this.formInstance = new this.config.form();
+		this.formInstance = new this.config.form(this.config.formConfig);
 		this.formInstance.onChange.subscribe((value) => {
 			this.onChange.emit(value);
 			this.invoke();

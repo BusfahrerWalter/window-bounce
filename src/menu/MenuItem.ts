@@ -18,7 +18,8 @@ export interface MenuItemConfig {
 	menu?: MenuConfig;
 	checked?: boolean;
 	bind?: Binding;
-	form?: new () => Form;
+	form?: new (config?: any) => Form;
+	formConfig?: any;
 	value?: any;
 }
 

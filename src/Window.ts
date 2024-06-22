@@ -1,6 +1,7 @@
-import { Bounds, Vector, Vertex, Vertices } from "matter-js";
+import { Bounds, Vector } from "matter-js";
+// @ts-ignore No types ...
+import * as ClipperLib from 'clipper-lib';
 import { Application } from "./Application";
-import hull from 'hull.js';
 import { Util } from "./util/Util";
 
 export interface Rect {
@@ -18,6 +19,11 @@ export interface Line {
 interface IndexedVector {
 	vector: Vector;
 	index: number
+}
+
+interface BoundInfo {
+	bounds: Bounds;
+	vertices: Vector[];
 }
 
 export class ClientWindow {
@@ -70,7 +76,7 @@ export class ClientWindow {
 	}
 
 	public getWindowIDs(): string[] {
-		return this.app.storage.get('windows') ?? [];
+		return this.app.storage.get('windows', []);
 	}
 
 	public pageToScreenPoint(pagePoint: Vector): Vector {
@@ -81,121 +87,113 @@ export class ClientWindow {
 		return Vector.sub(screenPoint, this.position);
 	}
 
-	public async getBorder(thickness: number = 50): Promise<Vector[]> {
-		const outline = await this.getOutline();
-		const extruded: Vector[] = [];
+	public async getBorder(thickness: number = 50): Promise<Vector[][]> {
+		const outlineGroups = await this.getOutline();
+		const borderGroups: Vector[][] = [];
 
-		// insert notch point
-		const notchPoint = Vector.div(Vector.add(outline[outline.length - 1], outline[0]), 2);
-		outline.unshift(Vector.create(notchPoint.x, notchPoint.y));
-		outline.push(notchPoint);
+		for (const group of outlineGroups) {
+			const extruded: Vector[] = [];
 
-		for (let i = 0; i < outline.length; i++) {
-			const vertex = outline[i];
-			const prevVertex = outline[i === 0 ? outline.length - 1 : i - 1];
-			const nextVertex = outline[(i + 1) % outline.length];
+			// insert notch point (required for a valid physics shape hull)
+			group.push(Vector.create(group[0].x, group[0].y));
 
-			const edge1 = Vector.sub(vertex, prevVertex);
-			const edge2 = Vector.sub(nextVertex, vertex);
+			for (let i = 0; i < group.length; i++) {
+				const vertex = group[i];
+				const prevVertex = group[i === 0 ? group.length - 1 : i - 1];
+				const nextVertex = group[(i + 1) % group.length];
 
-			// calculate normals perpendicular to the edge
-			const normal1 = Vector.normalise(Vector.perp(edge1));
-			const normal2 = Vector.normalise(Vector.perp(edge2));
+				const edge1 = Vector.sub(vertex, prevVertex);
+				const edge2 = Vector.sub(nextVertex, vertex);
 
-			// average the normals to get the extrusion direction
-			const normal = Vector.normalise(Vector.add(normal1, normal2));
+				// calculate normals perpendicular to the edge
+				const normal1 = Vector.normalise(Vector.perp(edge1));
+				const normal2 = Vector.normalise(Vector.perp(edge2));
 
-			// extrude vertex
-			const extrudedVertex = Vector.add(vertex, Vector.mult(normal, -thickness));
-			extruded.push(extrudedVertex);
+				// average the normals to get the extrusion direction
+				const normal = Vector.normalise(Vector.add(normal1, normal2));
+
+				// extrude vertex
+				const extrudedVertex = Vector.add(vertex, Vector.mult(normal, -thickness));
+				extruded.push(extrudedVertex);
+			}
+
+			borderGroups.push(group.concat(extruded.reverse()));
 		}
 
-		return outline.concat(extruded.reverse());
+		return borderGroups;
 	}
 
-	public async getOutline(): Promise<Vector[]> {
+	public async getOutline(): Promise<Vector[][]> {
 		// get all rects
 		const infos = await this.app.getInfos();
 		const bounds: Bounds[] = infos.map(info => {
 			return Util.rectToBounds(info.rect);
 		});
 
-		// get all bounds & vertices
-		const rects: {
-			bounds: Bounds,
-			inset: Bounds,
-			vertices: Vector[]
-		}[] = [];
+		const vertexLists: Vector[][] = [];
+		const rects: Set<BoundInfo> = new Set();
 
+		// get all bounds & vertices
 		for (const bound of bounds) {
-			rects.push({
+			rects.add({
 				bounds: bound,
-				inset: Util.inflateBounds(bound, -1),
 				vertices: [
-					Vector.create(bound.min.x, bound.min.y),
-					Vector.create(bound.min.x, bound.max.y),
-					Vector.create(bound.max.x, bound.max.y),
-					Vector.create(bound.max.x, bound.min.y)
+					Vector.create(bound.min.x, bound.min.y), // top left
+					Vector.create(bound.max.x, bound.min.y), // top right
+					Vector.create(bound.max.x, bound.max.y), // bottom right
+					Vector.create(bound.min.x, bound.max.y) // bottom left
 				]
 			});
 		}
 
-		// get edge intersection points
-		const intersectionVertices: Vector[] = [];
-		for (let i = 0; i < rects.length; i++) {
-			for (let j = i + 1; j < rects.length; j++) {
-				const rect1 = rects[i];
-				const rect2 = rects[j];
-
-				if (rect1 === rect2) {
-					continue;
-				}
-
-				const overlaps = Bounds.overlaps(rect1.bounds, rect2.bounds);
-				if (!overlaps) {
-					continue;
-				}
-
-				const intersectionPoints = this.getRectIntersectionPoints(rect1.bounds, rect2.bounds);
-				const filtered = intersectionPoints.map(point => {
-					return Vector.create(point.x, point.y);
-				}).filter(vertex => {
-					return !rects.some(rect => Bounds.contains(rect.inset, vertex));
-				});
-
-				intersectionVertices.push(...filtered);
+		// group all rects and build individual polygons
+		while (rects.size > 0) {
+			const first = rects.values().next().value as BoundInfo;
+			if (!first) {
+				break;
 			}
-		}
 
-		// filter out vertices which are contained in other rects
-		let vertices: Vector[] = [];
-		for (const rect of rects) {
-			for (const vertex of rect.vertices) {
-				const isContained = rects.some(r => {
-					return r === rect ? false : Bounds.contains(r.bounds, vertex);
-				});
-
-				if (!isContained) {
-					vertices.push(Vector.create(vertex.x, vertex.y));
+			const overlapping: BoundInfo[] = [];
+			for (const rect of rects) {
+				if (rect === first || Bounds.overlaps(rect.bounds, first.bounds)) {
+					overlapping.push(rect);
 				}
 			}
+
+			for (const rect of overlapping) {
+				rects.delete(rect);
+			}
+
+			const polygons = overlapping.map(rect => rect.vertices);
+			const result = this.merge(polygons);
+			vertexLists.push(result);
 		}
 
-		const all = vertices.concat(intersectionVertices).sort((a, b) => {
-			return a.x === b.x ? a.y - b.y : a.x - b.x;
+		return vertexLists;
+	}
+
+	private merge(rects: Vector[][]): Vector[] {
+		if (rects.length === 1) {
+			return rects[0];
+		}
+
+		const clipper = new ClipperLib.Clipper();
+		clipper.AddPath(rects[0].map(vector => {
+			return new ClipperLib.IntPoint(vector.x, vector.y);
+		}), ClipperLib.PolyType.ptSubject, true);
+
+		for (let i = 1; i < rects.length; i++) {
+			clipper.AddPath(rects[i].map(vector => {
+				return new ClipperLib.IntPoint(vector.x, vector.y);
+			}), ClipperLib.PolyType.ptClip, true);
+		}
+
+		const solution = new ClipperLib.Paths();
+		clipper.Execute(ClipperLib.ClipType.ctUnion, solution, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+
+		return solution[0].map((point: any) => {
+			return Vector.create(point.X, point.Y);
 		});
-
-		const sorted: Vector[] = [];
-		let current: number|Vector = 0;
-
-		while (all.length) {
-			const next = this.getNextPoint(all, current);
-			sorted.push(next.vector);
-			all.splice(next.index, 1);
-			current = next.vector;
-		}
-
-		return sorted;
 	}
 
 	public getRectIntersectionPoints(rect1: Bounds, rect2: Bounds): Vector[] {
@@ -274,54 +272,5 @@ export class ClientWindow {
 		const slope = (p2.y - p1.y) / (p2.x - p1.x);
 		const yIntercept = p1.y - slope * p1.x;
 		return { slope, yIntercept };
-	}
-
-	private getNextPoint(list: Vector[], current: number|Vector): IndexedVector {
-		const currentPoint = typeof current === 'number' ? list[current] : current;
-		if (!currentPoint) {
-			return {
-				vector: list[0],
-				index: 0
-			};
-		}
-
-		const find = (checker: (point: Vector) => boolean): IndexedVector|null => {
-			let minDistance = Infinity;
-			let result = null;
-			let index = -1;
-			for (let i = 0; i < list.length; i++) {
-				const point = list[i];
-				if (point === currentPoint || !checker(point)) {
-					continue;
-				}
-
-				const distance = Vector.magnitude(Vector.sub(point, currentPoint));
-				if (distance < minDistance) {
-					minDistance = distance;
-					result = point;
-					index = i;
-				}
-			}
-
-			return result ? {
-				vector: result,
-				index: index
-			} : null;
-		};
-
-		const vector =
-			find(point => point.x === currentPoint.x && point.y < currentPoint.y) ?? // top
-			find(point => point.y === currentPoint.y && point.x > currentPoint.x) ?? // right
-			find(point => point.x === currentPoint.x && point.y > currentPoint.y) ?? // bottom
-			find(point => point.y === currentPoint.y && point.x < currentPoint.x);   // left
-
-		if (!vector) {
-			return {
-				vector: list[0],
-				index: 0
-			};
-		}
-
-		return vector;
 	}
 }

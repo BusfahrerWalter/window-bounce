@@ -26,6 +26,7 @@ export enum MessageType {
 	ENGINE_UPDATE = 'engine-update',
 	ENGINE_ADD = 'engine-add',
 	ENGINE_REMOVE = 'engine-remove',
+	ENGINE_CONFIGURE = 'engine-configure',
 	DRAG_START = 'drag-start',
 	DRAG_END = 'drag-end',
 	DRAG_MOVE = 'drag-move'

@@ -4,6 +4,7 @@ import { CheckboxItem } from "./CheckboxItem";
 import { FormItem } from "./FormItem";
 import { Separator } from "./Separator";
 import { MenuConfig } from "./MenuItem";
+import { Util } from "../util/Util";
 
 export class Menu {
 
@@ -13,6 +14,7 @@ export class Menu {
 	public dom?: HTMLElement;
 	private items: MenuItem[];
 	private subMenus: Menu[];
+	protected prefersLeft: boolean = false;
 
 	constructor(parent: Menu|null, items: MenuConfig) {
 		this.parent = parent;
@@ -68,10 +70,33 @@ export class Menu {
 			document.body.append(dom);
 		}
 
+		if (this.parent) {
+			this.prefersLeft = this.parent.prefersLeft;
+		}
+
 		dom.style.left = `${position.x}px`;
 		dom.style.top = `${position.y}px`;
 
 		dom.showPopover();
+
+		// clamp to viewport
+		let rect = dom.getBoundingClientRect();
+		if (this.prefersLeft || rect.right > window.innerWidth) {
+			if (this.parent?.dom) {
+				const parentRect = this.parent.dom.getBoundingClientRect();
+				dom.style.left = `${Util.clamp(parentRect.left - rect.width, 0, window.innerWidth - rect.width)}px`;
+			} else {
+				dom.style.left = `${Math.max(window.innerWidth - rect.width, 0)}px`;
+			}
+			this.prefersLeft = true;
+		} else {
+			this.prefersLeft = false;
+		}
+
+		if (rect.bottom > window.innerHeight) {
+			dom.style.top = `${Math.max(window.innerHeight - rect.height, 0)}px`;
+		}
+
 		// @ts-ignore I hate ts ...
 		dom.addEventListener('toggle', (evt: ToggleEvent) => {
 			if (evt.newState === 'closed') {

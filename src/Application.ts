@@ -6,10 +6,11 @@ import { EventEmitter } from "./util/EventEmitter";
 import { Util } from "./util/Util";
 import { PhysicsEngine } from "./PhysicsEngine";
 import { ContextMenu } from "./ContextMenu";
-import { Bodies, Body, Bounds, Vector, Vertices, World } from "matter-js";
+import { Bodies, Body, Bounds, Common, Vector, Vertices, World } from "matter-js";
 
 interface WindowInfo {
 	background: [string, string];
+	isVisible: boolean,
 	rect: Rect;
 	id: string;
 }
@@ -17,6 +18,7 @@ interface WindowInfo {
 export interface ApplicationConfig {
 	enableBorder: boolean;
 	enableDebug: boolean;
+	showMinimap: boolean;
 	gravity: Vector;
 	gravityScale: number;
 }
@@ -37,7 +39,6 @@ export class Application {
 
 	private readonly overlayText: HTMLElement;
 
-	private border?: Body;
 	private windowInfoCache: WindowInfo[];
 	public previousSpawnFn?: Function;
 
@@ -54,6 +55,7 @@ export class Application {
 		this.settings = Object.assign({
 			enableBorder: true,
 			enableDebug: false,
+			showMinimap: true,
 			gravity: Vector.create(0, 1),
 			gravityScale: .001
 		}, storedSettings);
@@ -82,9 +84,9 @@ export class Application {
 
 	private async init() {
 		// register events
-		window.addEventListener('close', this.onCurrentWindowClose.bind(this));
-		window.addEventListener('unload', this.onCurrentWindowClose.bind(this));
-		window.addEventListener('resize', this.onCurrentWindowResize.bind(this));
+		window.addEventListener('close', this.onCurrentWindowClose.bind(this), true);
+		window.addEventListener('unload', this.onCurrentWindowClose.bind(this), true);
+		window.addEventListener('resize', this.onCurrentWindowResize.bind(this), true);
 		window.addEventListener('mousedown', this.onCurrentWindowMouseDown.bind(this));
 
 		// mäh...
@@ -157,7 +159,7 @@ export class Application {
 	}
 
 	private onCurrentWindowClose(evt: Event) {
-		const windows = this.storage.get('windows', []);
+		const windows = this.window.getWindowIDs();
 		const index = windows.indexOf(this.id);
 		if (index === -1) {
 			return;
@@ -206,6 +208,7 @@ export class Application {
 		if (!windowId || windowId === this.id) {
 			return {
 				background: this.renderer.background,
+				isVisible: document.visibilityState === 'visible',
 				rect: this.window.rect,
 				id: this.id
 			};
@@ -214,7 +217,7 @@ export class Application {
 		return await this.messenger.sendRequest(MessageType.WINDOW_INFO, windowId) as WindowInfo;
 	}
 
-	public async getInfos(): Promise<WindowInfo[]> {
+	public async getInfos(visibleOnly: boolean = true): Promise<WindowInfo[]> {
 		const windows = this.window.getWindowIDs();
 		const infos: WindowInfo[] = [];
 		for (const windowId of windows) {
@@ -222,11 +225,12 @@ export class Application {
 			infos.push(info);
 		}
 
-		return (this.windowInfoCache = infos);
+		this.windowInfoCache = infos;
+		return visibleOnly ? infos.filter(info => info.isVisible) : infos;
 	}
 
-	public getInfosSync(): WindowInfo[] {
-		return this.windowInfoCache;
+	public getInfosSync(visibleOnly: boolean = true): WindowInfo[] {
+		return visibleOnly ? this.windowInfoCache.filter(info => info.isVisible) : this.windowInfoCache;
 	}
 
 	public getHost(): string|null {
@@ -247,7 +251,6 @@ export class Application {
 			return;
 		}
 
-		this.updateMiniMap();
 		this.engine.run();
 	}
 
@@ -277,6 +280,11 @@ export class Application {
 		}
 
 		const existing = document.querySelector('.mini-map') as HTMLCanvasElement;
+		if (!this.settings.showMinimap) {
+			existing?.remove();
+			return;
+		}
+
 		const canvas = existing ?? document.createElement('canvas');
 		if (!existing) {
 			canvas.classList.add('mini-map');
@@ -341,58 +349,43 @@ export class Application {
 		ctx.fill();
 	}
 
-	public async updateBorders(thickness: number = 100) {
-		const border = await this.window.getBorder(thickness);
-		const bounds = Bounds.create(border);
-		const offset = Vector.div(Vector.add(bounds.min, bounds.max), 2);
+	public async updateBorders(thickness: number = 50) {
+		const removeBorder = () => {
+			const oldBorder = this.engine.bodies.filter(body => body.label === 'border');
+			if (oldBorder.length) {
+				this.engine.remove(...oldBorder);
+			}
+		};
 
-		const body = Bodies.fromVertices(offset.x, offset.y, [border], {
-			isStatic: true,
-			label: 'border' // will not be rendered per default
-		}, undefined, undefined, undefined, -1);
-
-		if (this.border) {
-			this.engine.remove(this.border);
+		if (!this.settings.enableBorder) {
+			removeBorder();
+			return;
 		}
 
-		this.border = body;
-		this.engine.add(body);
+		if (!this.isHost) {
+			return;
+		}
 
+		const borderGroups = await this.window.getBorder(thickness);
 
-		// const infos = await this.getInfos();
-		// const rect = (x: number, y: number, w: number, h: number): Body => {
-		// 	return Bodies.rectangle(x + w / 2, y + h / 2, w, h, {
-		// 		isStatic: true,
-		// 		label: 'border' // will not be rendered per default
-		// 	});
-		// };
+		// set the `setPosition` function to an empty function because it kinda messes up the positioning of the border shape
+		// not pretty but it gets the job done ...
+		const setPositionFn = Body.setPosition;
+		Body.setPosition = () => {};
 
-		// for (const info of infos) {
-		// 	const border = this.borders.get(info.id);
-		// 	const bounds = Util.rectToBounds(info.rect);
+		const borderBodies = borderGroups.map(group => {
+			const center = Vertices.centre(group);
+			return Bodies.fromVertices(center.x, center.y, [group], {
+				isStatic: true,
+				label: 'border' // will not be rendered per default
+			}, undefined, undefined, undefined, -1);
+		}).filter(body => body);
 
-		// 	const top = rect(bounds.min.x - borderWidth, bounds.min.y - borderWidth, info.rect.width + borderWidth * 2, borderWidth);
-		// 	const bottom = rect(bounds.min.x - borderWidth, bounds.max.y, info.rect.width + borderWidth * 2, borderWidth);
-		// 	const left = rect(bounds.min.x - borderWidth, bounds.min.y - borderWidth, borderWidth, info.rect.height + borderWidth * 2);
-		// 	const right = rect(bounds.max.x, bounds.min.y - borderWidth, borderWidth, info.rect.height + borderWidth * 2);
+		// reset `setPosition` function
+		Body.setPosition = setPositionFn;
 
-		// 	if (border) {
-		// 		this.engine.remove(border.top, border.bottom, border.left, border.right);
-		// 		this.borders.delete(info.id);
-		// 	}
-
-		// 	this.engine.add(top, bottom, left, right);
-		// 	this.borders.set(info.id, { top, bottom, left, right });
-		// }
-
-		// for (const [windowId, border] of Array.from(this.borders)) {
-		// 	const windowInfo = infos.find(info => info.id === windowId);
-		// 	if (windowInfo) {
-		// 		continue;
-		// 	}
-
-		// 	this.engine.remove(border.top, border.bottom, border.left, border.right);
-		// 	this.borders.delete(windowId);
-		// }
+		// remove older border and add new border to engine
+		removeBorder();
+		this.engine.add(...borderBodies);
 	}
 }

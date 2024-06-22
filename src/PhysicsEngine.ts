@@ -4,7 +4,6 @@ import * as decomp from 'poly-decomp';
 import { Application } from "./Application";
 import { EventEmitter } from "./util/EventEmitter";
 import { MessageTarget, MessageType } from "./Messenger";
-import { Util } from "./util/Util";
 
 export class PhysicsEngine {
 
@@ -20,7 +19,9 @@ export class PhysicsEngine {
 
 	constructor(app: Application) {
 		this.app = app;
-		this.engine = Engine.create();
+		this.engine = Engine.create({
+			gravity: app.settings.gravity
+		});
 		this.init();
 	}
 
@@ -76,27 +77,10 @@ export class PhysicsEngine {
 		this.app.messenger.on(MessageType.ENGINE_ADD, this.onEngineAdd.bind(this));
 		this.app.messenger.on(MessageType.ENGINE_REMOVE, this.onEngineRemove.bind(this));
 		this.app.messenger.on(MessageType.ENGINE_UPDATE, this.onEngineUpdate.bind(this));
+		this.app.messenger.on(MessageType.ENGINE_CONFIGURE, this.onEngineConfigure.bind(this));
 		this.app.messenger.on(MessageType.DRAG_START, this.onMouseDown.bind(this));
 		this.app.messenger.on(MessageType.DRAG_END, this.onMouseUp.bind(this));
 		this.app.messenger.on(MessageType.DRAG_MOVE, this.onMouseMove.bind(this));
-
-		// add ground
-		// const ground = Bodies.rectangle(0, screen.availHeight + 50, 99999, 100, {
-		// 	isStatic: true
-		// });
-
-		// Composite.add(this.engine.world, ground);
-
-		// if (this.app.settings.enableDebug) {
-		// 	Render.run(Render.create({
-		// 		element: document.body,
-		// 		engine: this.engine,
-		// 		options: {
-		// 			width: window.innerWidth,
-		// 			height: window.innerHeight
-		// 		}
-		// 	}));
-		// }
 	}
 
 	private onMouseDown(position: Vector) {
@@ -153,6 +137,10 @@ export class PhysicsEngine {
 		}
 	}
 
+	private onEngineConfigure(data: any) {
+		this.configure(data);
+	}
+
 	private onEngineAdd(bodies: Body[]) {
 		this.add(...bodies);
 	}
@@ -178,48 +166,6 @@ export class PhysicsEngine {
 		if (this.bodies) {
 			Composite.add(this.engine.world, this.bodies);
 		}
-
-		// const collisionEventHandler = (evt: Matter.IEventCollision<Engine>) => {
-		// 	const infos = this.app.getInfosSync();
-		// 	const bounds = infos.map(info => Util.inflateBounds(Util.rectToBounds(info.rect), -10));
-
-		// 	for (const pair of evt.pairs) {
-		// 		if (pair.bodyA.label !== 'border' && pair.bodyB.label !== 'border') {
-		// 			continue;
-		// 		}
-
-		// 		console.log(pair.contacts.map(c => c.vertex.body.id).join(', '));
-
-		// 		const contactsOnBody = pair.contacts.filter(contact => {
-		// 			return contact.vertex.body.label !== 'border';
-		// 		});
-
-		// 		if (contactsOnBody.length === 0) {
-		// 			continue;
-		// 		}
-
-		// 		// const isInBounds = bounds.some(bound => {
-		// 		// 	return pair.contacts.every(contact => Bounds.contains(bound, contact.vertex));
-		// 		// });
-		// 		// console.log(pair.contacts, pair.activeContacts);
-
-		// 		const isInBounds = contactsOnBody.some(contact => {
-		// 			return bounds.some(bound => Bounds.contains(bound, contact.vertex));
-		// 		});
-
-		// 		if (isInBounds) {
-		// 			pair.isActive = false;
-		// 		}
-		// 		else {
-		// 			console.log(contactsOnBody);
-		// 		}
-
-		// 		// Bounds.contains(bound, Vector.sub(contact.vertex, pair.collision.penetration))
-		// 		// console.log(isInBounds, pair.collision.penetration);
-		// 	}
-		// };
-
-		// Events.on(this.engine, 'collisionStart', collisionEventHandler);
 
 		this.isRunning = true;
 		this.loop();
@@ -270,11 +216,30 @@ export class PhysicsEngine {
 			return;
 		}
 
-		this.bodies = this.bodies.filter(body => {
-			return !bodies.includes(body);
+		const toRemove = this.bodies.filter(body => {
+			return bodies.find(b => b.id === body.id);
 		});
 
-		Composite.remove(this.engine.world, bodies);
+		this.bodies = this.bodies.filter(body => {
+			return !toRemove.includes(body);
+		});
+
+		Composite.remove(this.engine.world, toRemove);
+	}
+
+	public configure(data: any) {
+		if (!this.app.isHost) {
+			this.app.messenger.sendMessage(MessageType.ENGINE_CONFIGURE, data, MessageTarget.HOST);
+			return;
+		}
+
+		if (!data) {
+			return;
+		}
+
+		if (data.gravity) {
+			Object.assign(this.engine.gravity, data.gravity);
+		}
 	}
 
 	public getBodyAtPosition(position: Vector): Body|null {

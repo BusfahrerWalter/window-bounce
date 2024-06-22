@@ -10,8 +10,8 @@ export class Slider2DForm extends Form<Vector> {
 	private dot?: HTMLElement;
 	private display?: HTMLElement
 
-	constructor() {
-		super();
+	constructor(config?: any) {
+		super(config);
 		this.onWindowMouseMove = this.onWindowMouseMove.bind(this);
 		this.onWindowMouseUp = this.onWindowMouseUp.bind(this);
 	}
@@ -38,7 +38,7 @@ export class Slider2DForm extends Form<Vector> {
 		this.dot = dot;
 		this.display = display;
 
-		this.setDotPos(value);
+		this.setDotPosByValue(value);
 		dom.append(dot, display);
 		return dom;
 	}
@@ -61,20 +61,38 @@ export class Slider2DForm extends Form<Vector> {
 		window.addEventListener('mousemove', this.onWindowMouseMove);
 	}
 
-	setDotPos(pos: Vector): void {
+	private setDotPos(pos: Vector) {
+		const rect = this.getRect();
+		const relativePos = Vector.create(pos.x / rect.width, pos.y / rect.height);
+		const clampedPos = Vector.create(Util.clamp01(relativePos.x), Util.clamp01(relativePos.y));
+		this.setDotPos01(clampedPos);
+	}
+
+	private setDotPos01(pos: Vector) {
 		if (!this.dot || !this.dom || !this.display) {
 			return;
 		}
 
-		const rect = this.getRect();
-		const relativePos = Vector.create(pos.x / rect.width, pos.y / rect.height);
-		const clampedPos = Vector.create(Util.clamp01(relativePos.x), Util.clamp01(relativePos.y));
+		this.dot.style.setProperty('top', `${pos.y * 100}%`);
+		this.dot.style.setProperty('left', `${pos.x * 100}%`);
 
-		this.dot.style.setProperty('top', `${clampedPos.y * 100}%`);
-		this.dot.style.setProperty('left', `${clampedPos.x * 100}%`);
-		this.display.textContent = `${clampedPos.x.toFixed(2)} x ${clampedPos.y.toFixed(2)}`;
+		const diff = this.config.max - this.config.min;
+		const value = Vector.mult(pos, diff);
+		value.x += this.config.min;
+		value.y += this.config.min;
 
-		this.onChange.emit(clampedPos);
+		this.display.textContent = `${value.x.toFixed(2)} x ${value.y.toFixed(2)}`;
+		this.onChange.emit(value);
+	}
+
+	private setDotPosByValue(val: Vector) {
+		const diff = this.config.max - this.config.min;
+		const value = Vector.create(
+			val.x / diff + (diff / 2) / diff,
+			val.y / diff + (diff / 2) / diff
+		);
+
+		this.setDotPos01(value);
 	}
 
 	getRect(): DOMRect {
