@@ -129,7 +129,7 @@ noscript {
 }
 
 .menu-item input[type='checkbox']:checked {
-	mask: url(./assets/check-solid.svg) center no-repeat, linear-gradient(#000 0 0);
+	mask: url(/assets/check-solid.svg) center no-repeat, linear-gradient(#000 0 0);
 	mask-size: 70%;
 	mask-composite: exclude;
 	background-color: #ffcc3e;
