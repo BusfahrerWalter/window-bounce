@@ -29,7 +29,9 @@ const settingsFormMap: {[key: string]: (app: Application, key: string, value: an
 	},
 	gravityScale: () => null,
 	enableDebug: () => null
-}
+};
+
+const childWindows: Window[] = [];
 
 export default function(app: Application): MenuConfig {
 	const spawnButtons = (cfg?: any): MenuConfig => {
@@ -118,6 +120,10 @@ export default function(app: Application): MenuConfig {
 		text: 'Clear local data',
 		fn: () => {
 			app.storage.clear();
+			for (const win of childWindows) {
+				win.close();
+			}
+			window.location.reload();
 		}
 	},
 	{
@@ -132,7 +138,10 @@ export default function(app: Application): MenuConfig {
 		fn: () => {
 			const url = new URL(window.location.href);
 			url.searchParams.set('parent', app.id);
-			window.open(url, '_blank');
+			const win = window.open(url, '_blank');
+			if (win) {
+				childWindows.push(win);
+			}
 		}
 	}];
 
